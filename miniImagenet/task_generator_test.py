@@ -98,8 +98,7 @@ class MiniImagenet(FewShotDataset):
     def __getitem__(self, idx):
         image_root = self.image_roots[idx]
         image_name = image_root.split('/')[-1].split('.')[0]
-        #saliency_root = "/flush1/zha230/SOSN-master/datas/miniImagenet-saliency/images_maps/" + image_name + '_RBD.png'
-        saliency_root = "/flush1/zha230/LearningToCompare/datas/miniImagenet/saliency_cvpr18/" + image_name + '.jpg'
+        saliency_root = "/flush1/zha230/LearningToCompare/datas/miniImagenet/saliency_maps/" + image_name + '.jpg'
         image = Image.open(image_root).convert('RGB')
         saliency_map = transforms.ToTensor()(transforms.Resize([84,84])(Image.open(saliency_root).convert('L')))
         #print(saliency_map)
