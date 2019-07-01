@@ -23,6 +23,9 @@ python miniimagenet_test_few_shot_SalNet_IntraClass.py -w 5 -s 1
 ```
 
 ## Citation
+If you use this code in your research, please cite the following paper.
+
+```
 @InProceedings{Zhang_2019_CVPR,
 author = {Zhang, Hongguang and Zhang, Jing and Koniusz, Piotr},
 title = {Few-Shot Learning via Saliency-Guided Hallucination of Samples},
@@ -30,4 +33,6 @@ booktitle = {The IEEE Conference on Computer Vision and Pattern Recognition (CVP
 month = {June},
 year = {2019}
 }
+```
+
 
