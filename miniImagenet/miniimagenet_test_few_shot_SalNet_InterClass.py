@@ -34,7 +34,7 @@ parser.add_argument("-l","--learning_rate", type = float, default = 0.001)
 parser.add_argument("-g","--gpu",type=int, default=0)
 parser.add_argument("-u","--hidden_unit",type=int,default=10)
 parser.add_argument("-sigma","--sigma", type = float, default = 150)
-parser.add_argument("-beta","--beta", type = float, default = 0.01)
+parser.add_argument("-beta","--beta", type = float, default = 0.2)
 parser.add_argument("-alpha","--alpha", type = float, default = 1)
 args = parser.parse_args()
 
