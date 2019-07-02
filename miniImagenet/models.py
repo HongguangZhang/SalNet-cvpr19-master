@@ -52,11 +52,11 @@ class MixtureNetwork(nn.Module):
                         nn.BatchNorm2d(64, momentum=1, affine=True),
                         nn.ReLU())
     def forward(self,x):
-        out1 = self.layer1(x)
-        out2 = self.layer2(out1+x)	
-        out3 = self.layer3(out2+out1)
-        out4 = self.layer4(out3+out2)
-        return out4
+        out = self.layer1(x)
+        out = self.layer2(out)
+        out = self.layer3(out)
+        out = self.layer4(out)
+        return out
 
 class SimilarityNetwork(nn.Module):
     """docstring for RelationNetwork"""
