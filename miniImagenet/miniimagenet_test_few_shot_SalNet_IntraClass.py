@@ -5,7 +5,7 @@ from torch.autograd import Variable
 from torch.optim.lr_scheduler import StepLR
 import torchvision
 import numpy as np
-import task_generator as tg
+import task_generator_test as tg
 import os
 import math
 import argparse

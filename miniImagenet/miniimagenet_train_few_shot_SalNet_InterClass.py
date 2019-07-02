@@ -19,6 +19,7 @@ import math
 import argparse
 import scipy as sp
 import scipy.stats
+import time
 import models
 
 parser = argparse.ArgumentParser(description="One Shot Visual Recognition")
@@ -37,14 +38,13 @@ parser.add_argument("-beta","--beta", type = float, default = 0.01)
 parser.add_argument("-alpha","--alpha", type = float, default = 1)
 args = parser.parse_args()
 
-
 # Hyper Parameters
-METHOD = "SalNet_InterClass_HSP"
+METHOD = "SalNet_InterClass"
 FEATURE_DIM = args.feature_dim
 RELATION_DIM = args.relation_dim
 CLASS_NUM = args.class_num
 SUPPORT_NUM_PER_CLASS = args.support_num_per_class
-QUERY_NUM_PER_CLASS = args.query_num_per_class
+BATCH_NUM_PER_CLASS = args.query_num_per_class
 EPISODE = args.episode
 TEST_EPISODE = args.test_episode
 LEARNING_RATE = args.learning_rate
@@ -57,12 +57,9 @@ def similarity_func(x,c,s):
 	score = torch.Tensor(c,s,c*s).cuda(GPU)
 	for c_ in range(c):
 		for s_ in range(s):
-			for n in range(c*s):
-				metric = torch.mean(torch.abs(x[c_,s_,c_*s+s_,:,:].view(-1) - x[c_,s_,n,:,:].view(-1))**2)
-				if 2*torch.exp(-args.alpha*metric)/(1 + torch.exp(-args.alpha*metric))>0.7:
-					score[c_,s_,n] = 1
-				else:
-					score[c_,s_,n] = 0
+			metric = (torch.abs(x[c_,s_,c_*s+s_,:,:,:] - x[c_,s_,:,:,:,:])**2)
+			metric = metric.mean(3).mean(2).mean(1)
+			score[c_,s_,:] = 2*torch.exp(-args.alpha*metric)/(1 + torch.exp(-args.alpha*metric))
 	return score
 	
 def power_norm(x, SIGMA):
@@ -127,7 +124,7 @@ def main():
     if os.path.exists(str(METHOD + "/miniImagenet_relation_network_"+ str(CLASS_NUM) +"way_" + str(SUPPORT_NUM_PER_CLASS) +"shot.pkl")):
         relation_network.load_state_dict(torch.load(str(METHOD + "/miniImagenet_relation_network_"+ str(CLASS_NUM) +"way_" + str(SUPPORT_NUM_PER_CLASS) +"shot.pkl")))
         print("load relation network success")
-
+	
 	# Loading vanilla models    
     if os.path.exists(str("./vanilla_models/miniImagenet_foreground_encoder_" + str(CLASS_NUM) +"way_" + str(SUPPORT_NUM_PER_CLASS) +"shot.pkl")):
         vanilla_foreground_encoder.load_state_dict(torch.load(str("./vanilla_models/miniImagenet_foreground_encoder_" + str(CLASS_NUM) +"way_" + str(SUPPORT_NUM_PER_CLASS) +"shot.pkl")))
@@ -144,7 +141,7 @@ def main():
     print("Training...")
 
     best_accuracy = 0.0
-            
+    start = time.time()            
     for episode in range(EPISODE):
         mse = nn.MSELoss().cuda(GPU)
             
@@ -154,14 +151,13 @@ def main():
         relation_network_scheduler.step(episode)
 
         # init dataset
-        task = tg.MiniImagenetTask(metatrain_folders,CLASS_NUM,SUPPORT_NUM_PER_CLASS,QUERY_NUM_PER_CLASS)
+        task = tg.MiniImagenetTask(metatrain_folders,CLASS_NUM,SUPPORT_NUM_PER_CLASS,BATCH_NUM_PER_CLASS)
         support_dataloader = tg.get_mini_imagenet_data_loader(task,num_per_class=SUPPORT_NUM_PER_CLASS,split="train",shuffle=False)
-        query_dataloader = tg.get_mini_imagenet_data_loader(task,num_per_class=QUERY_NUM_PER_CLASS,split="query",shuffle=True)
+        query_dataloader = tg.get_mini_imagenet_data_loader(task,num_per_class=BATCH_NUM_PER_CLASS,split="test",shuffle=True)
 
         # support datas
         support_img,support_sal,support_labels = support_dataloader.__iter__().next()
         query_img,query_sal,query_labels = query_dataloader.__iter__().next()
-        
         # calculate features      
         support_foreground_features = foreground_encoder(Variable(support_img*support_sal).cuda(GPU)).view(CLASS_NUM, SUPPORT_NUM_PER_CLASS,64,19,19)       
         support_background_features = background_encoder(Variable(support_img*(1-support_sal)).cuda(GPU)).view(CLASS_NUM, SUPPORT_NUM_PER_CLASS,64,19,19)
@@ -171,38 +167,39 @@ def main():
         # Real-Representation Regularization (TriR), teacher network
         support_foreground_features_ = vanilla_foreground_encoder(Variable(support_img*support_sal).cuda(GPU))
         support_background_features_ = vanilla_background_encoder(Variable(support_img*(1-support_sal)).cuda(GPU))
-        support_features_ = vanilla_mixture_network(support_foreground_features_ + support_background_features_)        
-        support_features__ = mixture_network((support_foreground_features + support_background_features).view(-1,64,19,19))        
-        TriR = args.beta*mse(support_features__, Variable(support_features_, requires_grad=False))
+        support_mix_features_ = vanilla_mixture_network(support_foreground_features_ + support_background_features_)   
+        support_mix_features__ = mixture_network((support_foreground_features + support_background_features).view(-1,64,19,19))
+        TriR = args.beta*mse(support_mix_features__, Variable(support_mix_features_, requires_grad=False))
         
-        # Inter-class hallucination
+        # Inter-class Hallucination
         support_foreground_features = support_foreground_features.unsqueeze(2).repeat(1,1,CLASS_NUM*SUPPORT_NUM_PER_CLASS,1,1,1)
         support_background_features = support_background_features.view(1,1,CLASS_NUM*SUPPORT_NUM_PER_CLASS,64,19,19).repeat(CLASS_NUM,SUPPORT_NUM_PER_CLASS,1,1,1,1)
         similarity_measure = similarity_func(support_background_features, CLASS_NUM, SUPPORT_NUM_PER_CLASS).view(CLASS_NUM,SUPPORT_NUM_PER_CLASS,-1,1,1)
+        
         support_mix_features = mixture_network((support_foreground_features + support_background_features).view((CLASS_NUM**2)*(SUPPORT_NUM_PER_CLASS**2),64,19,19)).view(CLASS_NUM,SUPPORT_NUM_PER_CLASS,-1,64,19**2)
         support_mix_features = (support_mix_features*similarity_measure).sum(2).sum(1)
         query_mix_features = mixture_network(query_foreground_features + query_background_features).view(-1,64,19**2)
-        
         so_support_features = Variable(torch.Tensor(CLASS_NUM, 1, 64, 64)).cuda(GPU)
-        so_query_features = Variable(torch.Tensor(QUERY_NUM_PER_CLASS*CLASS_NUM, 1, 64, 64)).cuda(GPU)
+        so_query_features = Variable(torch.Tensor(BATCH_NUM_PER_CLASS*CLASS_NUM, 1, 64, 64)).cuda(GPU)
+
         # second-order features
         for d in range(support_mix_features.size()[0]):
             s = support_mix_features[d,:,:].squeeze(0)
-            s = (1 / support_mix_features.size()[2]) * s.mm(s.transpose(0,1))
+            s = (1.0 / support_mix_features.size()[2]) * s.mm(s.transpose(0,1))
             so_support_features[d,:,:,:] = power_norm(s / s.trace(), SIGMA)
         for d in range(query_mix_features.size()[0]):
             s = query_mix_features[d,:,:].squeeze(0)
-            s = (1 / query_mix_features.size()[2]) * s.mm(s.transpose(0,1))
+            s = (1.0 / query_mix_features.size()[2]) * s.mm(s.transpose(0,1))
             so_query_features[d,:,:,:] = power_norm(s / s.trace(), SIGMA)
-
+            
         # calculate relations with 64x64 second-order features
-        support_features_ext = so_support_features.unsqueeze(0).repeat(QUERY_NUM_PER_CLASS*CLASS_NUM,1,1,1,1)
+        support_features_ext = so_support_features.unsqueeze(0).repeat(BATCH_NUM_PER_CLASS*CLASS_NUM,1,1,1,1)
         query_features_ext = so_query_features.unsqueeze(0).repeat(CLASS_NUM,1,1,1,1)
         query_features_ext = torch.transpose(query_features_ext,0,1)
         relation_pairs = torch.cat((support_features_ext,query_features_ext),2).view(-1,2,64,64)
         relations = relation_network(relation_pairs).view(-1,CLASS_NUM)
 
-        one_hot_labels = Variable(torch.zeros(QUERY_NUM_PER_CLASS*CLASS_NUM, CLASS_NUM).scatter_(1, query_labels.view(-1,1), 1)).cuda(GPU)
+        one_hot_labels = Variable(torch.zeros(BATCH_NUM_PER_CLASS*CLASS_NUM, CLASS_NUM).scatter_(1, query_labels.view(-1,1), 1)).cuda(GPU)
         loss = mse(relations,one_hot_labels) + TriR
         
         # update network parameters
@@ -222,11 +219,10 @@ def main():
         background_encoder_optim.step()
         mixture_network_optim.step()
         relation_network_optim.step()
-
-        
+       
         if np.mod(episode+1,100)==0:
-            print("episode:",episode+1,"loss",loss.item())
-            
+        	print("episode:",episode+1,"loss",loss.item())
+        	
         if np.mod(episode,2500)==0:
             # test
             print("Testing...")
@@ -236,36 +232,37 @@ def main():
                 counter = 0
                 task = tg.MiniImagenetTask(metaquery_folders,CLASS_NUM,SUPPORT_NUM_PER_CLASS,15)
                 support_dataloader = tg.get_mini_imagenet_data_loader(task,num_per_class=SUPPORT_NUM_PER_CLASS,split="train",shuffle=False)
-                num_per_class = 3
-                query_dataloader = tg.get_mini_imagenet_data_loader(task,num_per_class=num_per_class,split="query",shuffle=True)
+                num_per_class = 2
+                query_dataloader = tg.get_mini_imagenet_data_loader(task,num_per_class=num_per_class,split="test",shuffle=True)
                 support_img,support_sal,support_labels = support_dataloader.__iter__().next()
                 for query_img,query_sal,query_labels in query_dataloader:
                     query_size = query_labels.shape[0]
-        	    	# calculate featurer
+        	    	# calculate foreground and background features
                     support_foreground_features = foreground_encoder(Variable(support_img*support_sal).cuda(GPU)).view(CLASS_NUM, SUPPORT_NUM_PER_CLASS,64,19,19)
                     support_background_features = background_encoder(Variable(support_img*(1-support_sal)).cuda(GPU)).view(CLASS_NUM, SUPPORT_NUM_PER_CLASS,64,19,19)
                     query_foreground_features = foreground_encoder(Variable(query_img*query_sal).cuda(GPU))
                     query_background_features = background_encoder(Variable(query_img*(1-query_sal)).cuda(GPU))
+                    
         	    	# Inter-class Hallucination
                     support_foreground_features = support_foreground_features.unsqueeze(2).repeat(1,1,CLASS_NUM*SUPPORT_NUM_PER_CLASS,1,1,1)
                     support_background_features = support_background_features.view(1,1,CLASS_NUM*SUPPORT_NUM_PER_CLASS,64,19,19).repeat(CLASS_NUM,SUPPORT_NUM_PER_CLASS,1,1,1,1)
-                    similarity_measure = similarity_func(support_background_features, CLASS_NUM, SUPPORT_NUM_PER_CLASS).view(CLASS_NUM,SUPPORT_NUM_PER_CLASS,-1,1,1)#.repeat(1,1,1,64,19**2)
+                    similarity_measure = similarity_func(support_background_features, CLASS_NUM, SUPPORT_NUM_PER_CLASS).view(CLASS_NUM,SUPPORT_NUM_PER_CLASS,-1,1,1)
                     support_mix_features = mixture_network((support_foreground_features + support_background_features).view((CLASS_NUM*SUPPORT_NUM_PER_CLASS)**2,64,19,19)).view(CLASS_NUM,SUPPORT_NUM_PER_CLASS,-1,64,19**2)
                     support_mix_features = (support_mix_features*similarity_measure).sum(2).sum(1)
                     query_mix_features = mixture_network(query_foreground_features + query_background_features).view(-1,64,19**2)
-                    
                     so_support_features = Variable(torch.Tensor(CLASS_NUM, 1, 64, 64)).cuda(GPU)
                     so_query_features = Variable(torch.Tensor(query_size, 1, 64, 64)).cuda(GPU)
+                    
         	    	# second-order features
                     for d in range(support_mix_features.size()[0]):
                         s = support_mix_features[d,:,:].squeeze(0)
-                        s = (1 / support_mix_features.size()[2]) * s.mm(s.transpose(0,1))
+                        s = (1.0 / support_mix_features.size()[2]) * s.mm(s.transpose(0,1))
                         so_support_features[d,:,:,:] = power_norm(s / s.trace(),SIGMA)
                     for d in range(query_mix_features.size()[0]):
                         s = query_mix_features[d,:,:].squeeze(0)
-                        s = (1 / query_mix_features.size()[2]) * s.mm(s.transpose(0,1))
+                        s = (1.0 / query_mix_features.size()[2]) * s.mm(s.transpose(0,1))
                         so_query_features[d,:,:,:] = power_norm(s / s.trace(), SIGMA)
-                        
+                    
                     # calculate relations with 64x64 second-order features
                     support_features_ext = so_support_features.unsqueeze(0).repeat(query_size,1,1,1,1)
                     query_features_ext = so_query_features.unsqueeze(0).repeat(1*CLASS_NUM,1,1,1,1)
@@ -291,6 +288,5 @@ def main():
                 print("save networks for episode:",episode)
                 best_accuracy = test_accuracy
             print("best accuracy:",best_accuracy)
-            
 if __name__ == '__main__':
     main()
