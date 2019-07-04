@@ -94,8 +94,6 @@ def main():
         relation_network.load_state_dict(torch.load(str(METHOD + "/miniImagenet_relation_network_"+ str(CLASS_NUM) +"way_" + str(SUPPORT_NUM_PER_CLASS) +"shot.pkl")))
         print("load relation network success")
 
-    print("Training...")
-
     best_accuracy = 0.0
     best_h = 0.0
             
