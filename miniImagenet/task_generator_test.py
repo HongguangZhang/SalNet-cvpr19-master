@@ -1,4 +1,3 @@
-# code is based on https://github.com/katerakelly/pytorch-maml
 import torchvision
 import torchvision.datasets as dset
 import torchvision.transforms as transforms
